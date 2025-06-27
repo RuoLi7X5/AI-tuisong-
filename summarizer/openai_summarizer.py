@@ -28,8 +28,10 @@ class OpenAISummarizer:
                 max_tokens=300
             )
             print("[AI调试] openai返回：", response)
-            # 兼容新版openai返回结构
-            if hasattr(response, 'choices') and response.choices:
+            # 检查返回内容是否为HTML（如网页、报错页等）
+            if isinstance(response, str) and response.strip().startswith('<!DOCTYPE html>'):
+                summary = "AI摘要失败：API返回异常网页"
+            elif hasattr(response, 'choices') and response.choices:
                 summary = response.choices[0].message.content.strip()
             elif isinstance(response, dict) and 'choices' in response:
                 summary = response['choices'][0]['message']['content'].strip()
@@ -37,4 +39,7 @@ class OpenAISummarizer:
                 summary = f"AI返回异常: {response}"
         except Exception as e:
             summary = f"摘要失败: {e}"
+        # 如果AI摘要失败，降级为推送原始新闻内容
+        if not summary or summary.startswith("AI摘要失败"):
+            summary = news_item.get('content', '')[:500] or news_item.get('title', '')
         return {"title": news_item['title'], "summary": summary, "url": news_item['url']}
