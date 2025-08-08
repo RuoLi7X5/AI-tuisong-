@@ -13,6 +13,7 @@ from .ai_news import AINewsCrawler
 from .ai_official import AIOfficialBlogsCrawler
 from .ai_research import AIResearchCrawler
 from .ai_platforms import AIPlatformCrawler
+from state_store import StateStore
 
 
 def _deduplicate(items):
@@ -47,6 +48,7 @@ def run_all_crawlers():
         AIPlatformCrawler(),         # 云平台/框架/GitHub Releases
     ]
     news_list = []
+    store = StateStore()
     gold_snapshot = None
     for crawler in crawlers:
         try:
@@ -66,7 +68,10 @@ def run_all_crawlers():
                 tags = match_keywords(text)
                 if tags:
                     gold_snapshot["tags"] = tags
-                news_list.append(gold_snapshot)
+                key = gold_snapshot.get("url") or gold_snapshot.get("title", "")
+                if not store.seen(key):
+                    store.mark(key)
+                    news_list.append(gold_snapshot)
             continue
 
         for item in result:
@@ -74,7 +79,11 @@ def run_all_crawlers():
             tags = match_keywords(text)
             if tags:
                 item["tags"] = tags
-                news_list.append(item)
+                key = item.get("url") or item.get("title", "")
+                if not store.seen(key):
+                    store.mark(key)
+                    news_list.append(item)
     news_list = _deduplicate(news_list)
     print(f"[筛选] 关注板块：{', '.join(TARGET_SECTORS)}，产出 {len(news_list)} 条")
+    store.flush()
     return news_list

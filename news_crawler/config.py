@@ -110,12 +110,14 @@ def match_keywords(text: str) -> List[str]:
     for our purpose. You can replace with more robust NLP if needed.
     """
     tags: List[str] = []
+    policy_hit = False
     for kw in TARGET_SECTORS:
         if kw in text:
             tags.append(kw)
     for kw in POLICY_KEYWORDS:
         if kw in text:
             tags.append(kw)
+            policy_hit = True
     for kw in GOLD_KEYWORDS:
         if kw in text:
             tags.append(kw)
@@ -126,6 +128,8 @@ def match_keywords(text: str) -> List[str]:
             ai_hit = True
     if ai_hit:
         tags.append("AI行业")
+    if policy_hit:
+        tags.append("政策类")
     # de-duplicate while preserving order
     seen = set()
     deduped: List[str] = []

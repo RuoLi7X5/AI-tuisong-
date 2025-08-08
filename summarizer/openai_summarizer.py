@@ -11,6 +11,7 @@ from typing import Dict, Any
 
 from openai import OpenAI
 from app_config import get_openai_config
+import concurrent.futures
 
 
 class OpenAISummarizer:
@@ -85,3 +86,27 @@ class OpenAISummarizer:
             "summary": summary_text,
             "url": news_item.get("url", ""),
         }
+
+
+def summarize_batch(items: list[Dict[str, Any]], max_workers: int = 4) -> list[Dict[str, str]]:
+    """Summarize a batch of news items in parallel.
+
+    Returns a list of summarized dicts preserving order as best effort.
+    """
+    summarizer = OpenAISummarizer()
+    results: list[Dict[str, str]] = [None] * len(items)  # type: ignore
+
+    def _wrap(idx: int, it: Dict[str, Any]):
+        try:
+            results[idx] = summarizer.summarize(it)
+        except Exception as exc:  # noqa: BLE001
+            results[idx] = {
+                "title": it.get("title", ""),
+                "summary": f"摘要失败: {exc}",
+                "url": it.get("url", ""),
+            }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(_wrap, i, it) for i, it in enumerate(items)]
+        concurrent.futures.wait(futures)
+    return results  # type: ignore
