@@ -51,18 +51,25 @@ class AINewsCrawler(NewsCrawler):
 
     def crawl(self):
         items: list[dict] = []
+        failures: list[str] = []
         for src in self.sources:
             try:
                 resp = requests.get(src, headers=self.headers, timeout=10)
                 resp.encoding = resp.apparent_encoding
-                items.extend(self._extract(resp.text, src))
+                extracted = self._extract(resp.text, src)
+                if extracted:
+                    items.extend(extracted)
+                else:
+                    failures.append(src)
             except Exception as exc:  # noqa: BLE001
-                items.append({
-                    "title": "AI新闻抓取失败",
-                    "content": f"源: {src} 错误: {exc}",
-                    "url": src,
-                })
+                failures.append(f"{src} 错误: {exc}")
             time.sleep(0.3)
+        if failures:
+            items.append({
+                "title": "AI新闻抓取失败",
+                "content": "; ".join(failures)[:2000],
+                "url": "",
+            })
         return items
 
 

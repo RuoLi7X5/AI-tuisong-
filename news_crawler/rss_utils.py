@@ -9,7 +9,11 @@ def parse_rss_or_atom(xml_text: str) -> List[dict]:
 
     We support common variants: RSS (<item>) and Atom (<entry>).
     """
-    soup = BeautifulSoup(xml_text, "xml")
+    # Try XML parser; if not available, fall back to html parser
+    try:
+        soup = BeautifulSoup(xml_text, "xml")
+    except Exception:
+        soup = BeautifulSoup(xml_text, "html.parser")
     items: List[dict] = []
     # RSS
     for item in soup.find_all("item"):

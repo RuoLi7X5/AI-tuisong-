@@ -34,18 +34,24 @@ class AIOfficialBlogsCrawler(NewsCrawler):
 
     def crawl(self):
         items: List[dict] = []
+        failures: List[str] = []
         for url in self.feeds:
             try:
                 resp = requests.get(url, headers=self.headers, timeout=10)
                 parsed = parse_rss_or_atom(resp.text)
-                items.extend(parsed[: self.max_items])
+                if parsed:
+                    items.extend(parsed[: self.max_items])
+                else:
+                    failures.append(url)
             except Exception as exc:  # noqa: BLE001
-                items.append({
-                    "title": "AI官方博客抓取失败",
-                    "content": f"源: {url} 错误: {exc}",
-                    "url": url,
-                })
+                failures.append(f"{url} 错误: {exc}")
             time.sleep(0.2)
+        if failures:
+            items.append({
+                "title": "AI官方博客抓取失败",
+                "content": "; ".join(failures)[:2000],
+                "url": "",
+            })
         return items
 
 
