@@ -1,0 +1,13 @@
+{
+  "wxpusher": {
+    "app_token": "AT_ZRe67tUEihmWqeUTDrzFJCF2ML6rbD44",
+    "uid": "UID_EeV66gptdcw4iwmYGpLSheBLv4Zf"
+  },
+  "openai": {
+    "api_key": "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",
+    "base_url": "https://openrouter.ai/api/v1",
+    "model": "openai/gpt-4o-mini"
+  }
+}
+
+

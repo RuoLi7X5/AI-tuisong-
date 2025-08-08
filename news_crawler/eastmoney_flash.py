@@ -14,11 +14,9 @@ class EastMoneyFlashCrawler(NewsCrawler):
         }
         resp = requests.get(url, headers=headers, timeout=10)
         print(f"[调试] {url} status: {resp.status_code}")
-        print("[调试] API返回内容：", resp.text[:500])
         news_list = []
         try:
             data = resp.json()
-            print("[调试] API解析后：", data)
             for item in data.get('data', {}).get('list', []):
                 news_list.append({
                     "title": item.get("title", ""),

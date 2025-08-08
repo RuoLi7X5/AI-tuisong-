@@ -1,5 +1,6 @@
 # main.py
 # 主入口，调度爬虫、摘要、推送
+import argparse
 import schedule
 import time
 from news_crawler import run_all_crawlers
@@ -33,19 +34,20 @@ def job():
         push_to_wechat(item)
 
 if __name__ == "__main__":
-    from wechat_pusher.wxpusher import WxPusherPusher
-    pusher = WxPusherPusher()
-    test_news = {
-        "title": "测试推送",
-        "summary": "这是一条来自本地的WxPusher推送测试消息。",
-        "url": "https://wxpusher.zjiecode.com/"
-    }
-    print("推送内容：", test_news)
-    pusher.push(test_news)
-    print("测试推送已执行，请检查你的微信！")
+    parser = argparse.ArgumentParser(description="AI 新闻推送工具")
+    parser.add_argument("--once", action="store_true", help="只执行一次后退出（CI/工作流模式）")
+    parser.add_argument("--interval-mins", type=int, default=60, help="循环模式下的运行间隔（分钟）")
+    args = parser.parse_args()
+
     job()  # 启动时立即执行一次
-    schedule.every().hour.at(":00").do(job)  # 每个整点执行一次
-    print("AI新闻推送工具已启动...")
+
+    if args.once:
+        sys.exit(0)
+
+    # 循环模式：按间隔分钟运行
+    schedule.clear()
+    schedule.every(args.interval_mins).minutes.do(job)
+    print("AI新闻推送工具已启动（循环模式）...")
     while True:
         schedule.run_pending()
-        time.sleep(60)
+        time.sleep(5)

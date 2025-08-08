@@ -1,0 +1,42 @@
+name: AI新闻与基金推送
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 16 * * *'   # 每天 北京时间 00:00（UTC-8 小时）
+    - cron: '50 3 * * *'   # 每天 北京时间 11:50
+    - cron: '0 10 * * *'   # 每天 北京时间 18:00
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-push
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run push job
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          WXPUSHER_APP_TOKEN: ${{ secrets.WXPUSHER_APP_TOKEN }}
+          WXPUSHER_UID: ${{ secrets.WXPUSHER_UID }}
+        run: python main.py --once
+
+

@@ -4,8 +4,8 @@ import requests
 from bs4 import BeautifulSoup
 
 class ChinaNewsCrawler(NewsCrawler):
-    """中国新闻网-国内新闻爬虫"""
-    def crawl(self):
+    """中国新闻网-国内新闻爬虫（限制抓取数量，去掉调试写盘）"""
+    def crawl(self, max_items: int = 50):
         url = "https://www.chinanews.com.cn/china/"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36'
@@ -15,10 +15,8 @@ class ChinaNewsCrawler(NewsCrawler):
         resp.encoding = resp.apparent_encoding
         soup = BeautifulSoup(resp.text, "html.parser")
         news_list = []
-        # 调试：将页面HTML写入文件，便于分析
-        with open('chinanews_debug.html', 'w', encoding='utf-8') as f:
-            f.write(resp.text)
         # 新闻列表区域
+        count = 0
         for li in soup.find_all('li'):
             a = li.find('a')
             if a and a.get('href') and a.get_text(strip=True):
@@ -43,5 +41,8 @@ class ChinaNewsCrawler(NewsCrawler):
                     "content": detail_content or a.get('title', ''),
                     "url": detail_url
                 })
+                count += 1
+                if count >= max_items:
+                    break
         print(f"[调试] ChinaNewsCrawler 抓取到 {len(news_list)} 条新闻")
         return news_list

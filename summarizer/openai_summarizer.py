@@ -1,45 +1,87 @@
-# summarizer/openai_summarizer.py
-# 用OpenAI API进行新闻摘要
-import openai
+"""
+News summarization via OpenRouter (OpenAI Python SDK v1 style).
+
+This implementation avoids hardcoded secrets, reads configuration from
+environment variables, and gracefully degrades to the original content when
+the AI call fails. It is suitable for CI environments (e.g., GitHub Actions).
+"""
+
+import os
+from typing import Dict, Any
+
+from openai import OpenAI
+from app_config import get_openai_config
+
 
 class OpenAISummarizer:
-    def __init__(self, api_key=None):
-        # 优先使用用户提供的openrouter API Key
-        self.api_key = api_key or "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"
-        openai.api_key = self.api_key
-        openai.base_url = "https://openrouter.ai/api/v1"  # openrouter专用
+    """Summarize news items using an OpenRouter-compatible OpenAI client.
 
-    def summarize(self, news_item):
-        # news_item: dict, 包含title/content/url
-        prompt = (
-            f"请以清晰、简洁、准确的语言总结以下新闻内容：\n"
-            f"{news_item['content']}\n"
-            "\n总结要求：\n"
-            "1. 先用简明扼要的语言总结新闻要点。\n"
-            "2. 在总结下方，分析新闻涉及的市场经济形势，指出对哪些行业有何影响，利好哪些产业，对基金和股票市场的影响，存在哪些机会。\n"
-            "3. 最后提出具有指导性的投资或关注建议。\n"
+    Environment variables:
+    - OPENROUTER_API_KEY: API key for OpenRouter
+    - OPENAI_BASE_URL: Optional base URL override. Defaults to OpenRouter v1
+    - OPENAI_MODEL: Optional model id. Defaults to 'openai/gpt-4o-mini'
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        max_tokens: int = 500,
+    ) -> None:
+        cfg = get_openai_config()
+        resolved_api_key = (api_key or os.getenv("OPENROUTER_API_KEY", "") or cfg.get("api_key", "")).strip()
+        resolved_base_url = (base_url or os.getenv("OPENAI_BASE_URL", "") or cfg.get("base_url", "https://openrouter.ai/api/v1")).strip()
+        resolved_model = (model or os.getenv("OPENAI_MODEL", "") or cfg.get("model", "openai/gpt-4o-mini")).strip()
+
+        self.model: str = resolved_model
+        self.max_tokens: int = max_tokens
+        self.client = OpenAI(api_key=resolved_api_key or None, base_url=resolved_base_url)
+
+    def _build_prompt(self, news_item: Dict[str, Any]) -> str:
+        content = news_item.get("content", "")
+        title = news_item.get("title", "")
+        tags = news_item.get("tags") or []
+        tag_line = f"关注标签：{', '.join(tags)}\n" if tags else ""
+        return (
+            "你是资深卖方行业分析师。请以清晰、简洁、准确的语言总结以下内容，并重点评估其对目标板块/基金的影响：\n"
+            f"标题：{title}\n"
+            f"正文：{content}\n\n"
+            f"{tag_line}"
+            "总结要求：\n"
+            "1) 新闻/政策/会议的关键结论；若为AI行业新闻，请说明：主体公司、模型名称/代号、来源/演进脉络、能力特长（推理/多模态/代码/工具调用等）、开放/商用情况；\n"
+            "2) 对稀土、白酒、半导体/芯片、创新药、雅江水电工程/水电、光伏等板块的影响路径（需求/供给/成本/价格/估值/政策风险）；\n"
+            "3) 对基金市场的影响：可能的申赎/持仓/资金流向变动；\n"
+            "4) 交易建议（短/中/长期），风险点与触发条件。\n"
             "请分条列出，内容务必专业、实用。"
         )
-        # 这里只做结构预留，实际调用需补充API Key和异常处理
+
+    def summarize(self, news_item: Dict[str, Any]) -> Dict[str, str]:
+        prompt = self._build_prompt(news_item)
+        summary_text: str
         try:
-            response = openai.chat.completions.create(
-                model="openai/gpt-3.5-turbo",
+            response = self.client.chat.completions.create(
+                model=self.model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=300
+                max_tokens=self.max_tokens,
+                temperature=0.3,
             )
-            print("[AI调试] openai返回：", response)
-            # 检查返回内容是否为HTML（如网页、报错页等）
-            if isinstance(response, str) and response.strip().startswith('<!DOCTYPE html>'):
-                summary = "AI摘要失败：API返回异常网页"
-            elif hasattr(response, 'choices') and response.choices:
-                summary = response.choices[0].message.content.strip()
-            elif isinstance(response, dict) and 'choices' in response:
-                summary = response['choices'][0]['message']['content'].strip()
+            if hasattr(response, "choices") and response.choices:
+                summary_text = (response.choices[0].message.content or "").strip()
             else:
-                summary = f"AI返回异常: {response}"
-        except Exception as e:
-            summary = f"摘要失败: {e}"
-        # 如果AI摘要失败，降级为推送原始新闻内容
-        if not summary or summary.startswith("AI摘要失败"):
-            summary = news_item.get('content', '')[:500] or news_item.get('title', '')
-        return {"title": news_item['title'], "summary": summary, "url": news_item['url']}
+                summary_text = ""
+        except Exception as exc:  # noqa: BLE001 - broad by design to gracefully degrade
+            summary_text = f"摘要失败: {exc}"
+
+        if not summary_text or summary_text.startswith("摘要失败"):
+            tags = news_item.get("tags")
+            tag_hint = f" [标签: {', '.join(tags)}]" if tags else ""
+            fallback = news_item.get("content", "") or news_item.get("title", "")
+            summary_text = fallback[:500]
+            summary_text = summary_text + tag_hint
+
+        return {
+            "title": news_item.get("title", ""),
+            "summary": summary_text,
+            "url": news_item.get("url", ""),
+        }
