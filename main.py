@@ -24,6 +24,7 @@ sys.stdout = Logger("print.log")
 sys.stderr = Logger("print.log")
 
 def job():
+    print(f"=== [VERSION 2.0] AGGREGATED PUSH LOGIC START ===")
     # 1. 获取新闻
     print(f"[{datetime.now()}] 开始抓取任务...")
     news_list = run_all_crawlers()
