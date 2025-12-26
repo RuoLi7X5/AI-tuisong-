@@ -1,4 +1,3 @@
-# news_crawler/__init__.py
 from .base import NewsCrawler
 from .eastmoney_fund import EastMoneyFundCrawler
 from .chinanews import ChinaNewsCrawler
@@ -9,10 +8,7 @@ from .config import match_keywords, TARGET_SECTORS
 from .sector_open import SectorOpenCrawler
 from .policy_watch import PolicyWatchCrawler
 from .policy_sources import MultiPolicyCrawler
-from .ai_news import AINewsCrawler
-from .ai_official import AIOfficialBlogsCrawler
-from .ai_research import AIResearchCrawler
-from .ai_platforms import AIPlatformCrawler
+from .cctv_news import CCTVNewsCrawler
 from state_store import StateStore
 
 
@@ -42,10 +38,7 @@ def run_all_crawlers():
         SectorOpenCrawler(),  # 关注板块的当日开盘/盘中快照
         PolicyWatchCrawler(),  # 重大会议/政策/外交要闻
         MultiPolicyCrawler(),  # 多部委/交易所等政策/公告源
-        AINewsCrawler(),             # AI 行业媒体
-        AIOfficialBlogsCrawler(),    # 官方博客（OpenAI/Anthropic/Google/Meta/HF等）
-        AIResearchCrawler(),         # arXiv + PwC
-        AIPlatformCrawler(),         # 云平台/框架/GitHub Releases
+        CCTVNewsCrawler(),     # 新闻联播内容
     ]
     news_list = []
     store = StateStore()
@@ -72,6 +65,16 @@ def run_all_crawlers():
                 if not store.seen(key):
                     store.mark(key)
                     news_list.append(gold_snapshot)
+            continue
+        
+        # CCTV Special Handling (Always add if found, maybe skip keyword match or ensure it has tags)
+        if isinstance(crawler, CCTVNewsCrawler):
+            for item in result:
+                # CCTV items usually already have tags assigned in crawler
+                key = item.get("url") or item.get("title", "")
+                if not store.seen(key):
+                    store.mark(key)
+                    news_list.append(item)
             continue
 
         for item in result:

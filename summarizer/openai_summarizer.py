@@ -51,7 +51,7 @@ class OpenAISummarizer:
             f"{tag_line}"
             "总结要求：\n"
             "1) 新闻/政策/会议的关键结论；若为AI行业新闻，请说明：主体公司、模型名称/代号、来源/演进脉络、能力特长（推理/多模态/代码/工具调用等）、开放/商用情况；\n"
-            "2) 对稀土、白酒、半导体/芯片、创新药、雅江水电工程/水电、光伏等板块的影响路径（需求/供给/成本/价格/估值/政策风险）；\n"
+            "2) 对半导体、黄金、CPO、通信、半导体设备、机器人、人工智能、白酒、高端制造、航天等板块的影响路径（需求/供给/成本/价格/估值/政策风险）；\n"
             "3) 对基金市场的影响：可能的申赎/持仓/资金流向变动；\n"
             "4) 交易建议（短/中/长期），风险点与触发条件。\n"
             "请分条列出，内容务必专业、实用。"
@@ -85,6 +85,7 @@ class OpenAISummarizer:
             "title": news_item.get("title", ""),
             "summary": summary_text,
             "url": news_item.get("url", ""),
+            "tags": news_item.get("tags", []),
         }
 
 
@@ -104,6 +105,7 @@ def summarize_batch(items: list[Dict[str, Any]], max_workers: int = 4) -> list[D
                 "title": it.get("title", ""),
                 "summary": f"摘要失败: {exc}",
                 "url": it.get("url", ""),
+                "tags": it.get("tags", []),
             }
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:

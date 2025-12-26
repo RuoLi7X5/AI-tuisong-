@@ -8,9 +8,10 @@ class EastMoneyFundCrawler(NewsCrawler):
 
     def __init__(self) -> None:
         # 使用东方财富快讯接口获取更多结构化资讯，再在上层用关键词过滤
+        # 注意: sortEnd 为空获取最新
         self.url = (
             "https://np-weblist.eastmoney.com/comm/web/getFastNewsList?"
-            "client=web&biz=web_724&fastColumn=103&pageSize=50"
+            "client=web&biz=web_724&fastColumn=103&pageSize=50&sortEnd="
         )
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
@@ -22,7 +23,11 @@ class EastMoneyFundCrawler(NewsCrawler):
         try:
             resp = requests.get(self.url, headers=self.headers, timeout=10)
             data = resp.json()
-            for item in data.get('data', {}).get('list', []):
+            items = data.get('data', {}).get('fastNewsList', [])
+            if not items:
+                items = data.get('data', {}).get('list', [])
+                
+            for item in items:
                 news_list.append({
                     "title": item.get("title", ""),
                     "content": item.get("summary", ""),
