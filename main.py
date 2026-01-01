@@ -9,6 +9,7 @@ from news_crawler import run_all_crawlers
 from summarizer.openai_summarizer import summarize_batch
 from wechat_pusher import push_to_wechat
 import sys
+from pending_store import PendingStore
 
 class Logger(object):
     def __init__(self, filename="print.log"):
@@ -23,127 +24,155 @@ class Logger(object):
 sys.stdout = Logger("print.log")
 sys.stderr = Logger("print.log")
 
-def job():
-    print(f"=== [VERSION 2.0] AGGREGATED PUSH LOGIC START ===")
-    # 1. 获取新闻
-    print(f"[{datetime.now()}] 开始抓取任务...")
-    news_list = run_all_crawlers()
-    print(f"抓取到新内容数量: {len(news_list)}")
-
-    # 分类
+def _classify(news_list):
     cctv_items = []
     policy_items = []
     market_items = []
-
     for it in news_list:
-        tags = it.get("tags", [])
-        if "新闻联播" in tags or "政治" in tags:
-            # 优先归为 CCTV/时政
-            if "新闻联播" in tags or "政治" in tags: 
-                 # 注意：CCTVNewsCrawler 的 item 会有 "新闻联播" tag
-                 # PolicyWatchCrawler 的 item 会有 "政策类" tag
-                 if "新闻联播" in tags:
-                     cctv_items.append(it)
-                 else:
-                     policy_items.append(it)
-        elif "政策类" in tags:
+        tags = it.get("tags", []) or []
+        if "新闻联播" in tags:
+            cctv_items.append(it)
+        elif "政策类" in tags or "政治" in tags:
             policy_items.append(it)
         else:
             market_items.append(it)
+    return cctv_items, policy_items, market_items
 
-    # 限制每批次处理数量，防止过多
-    # CCTV 通常只有1条，不限制
-    policy_items = policy_items[:10]
-    market_items = market_items[:15]
 
-    print(f"分类结果：CCTV {len(cctv_items)} 条，时政/政策 {len(policy_items)} 条，股市/行业 {len(market_items)} 条")
+def fast_job():
+    """高频执行：抓取新内容后立即推送“快讯”（不等待AI）。"""
+    print("=== FAST JOB START ===")
+    print(f"[{datetime.now()}] 开始抓取任务(快讯)...")
+    news_list = run_all_crawlers()
+    if not news_list:
+        print("无新内容。")
+        return
 
-    # 2. 摘要 (CCTV 已经是摘要或原文，暂不通过 AI 摘要，除非内容过长)
-    # 仅对政策和市场新闻进行 AI 摘要
-    items_to_summarize = policy_items + market_items
-    if items_to_summarize:
-        print(f"正在生成摘要，共 {len(items_to_summarize)} 条...")
-        summarized_items = summarize_batch(items_to_summarize, max_workers=4)
-    else:
-        summarized_items = []
+    cctv_items, policy_items, market_items = _classify(news_list)
+    print(f"快讯分类：CCTV {len(cctv_items)} 条，政策 {len(policy_items)} 条，市场 {len(market_items)} 条")
 
-    # 重新归类摘要后的内容
-    policy_sums = []
-    market_sums = []
-    
-    # 建立映射以便快速归类
-    sum_map = {id(it): it for it in summarized_items} # 这里 id 可能不准，因为 summarize_batch 返回新对象
-    # summarize_batch 通常保留原对象字段，我们通过 url/title 匹配
-    # 简单处理：遍历 summarized_items，检查 tags
-    
-    for item in summarized_items:
-        tags = item.get("tags", [])
-        if "政策类" in tags or "政治" in tags:
-             policy_sums.append(item)
-        else:
-             market_sums.append(item)
-
-    # 3. 微信推送 (聚合发送)
-    
-    # A. 新闻联播 (单独推送)
+    # CCTV：依旧即时推送全文/摘要
     for item in cctv_items:
-        # 格式化一下
         title = f"【新闻联播】{item.get('title')}"
-        # 如果是 crawler 抓取的“主要内容”，通常 content 就是列表
         push_to_wechat({
             "title": title,
-            "summary": item.get('content'), # 直接使用 content，通常是摘要
-            "url": item.get('url')
+            "summary": item.get("content", ""),
+            "url": item.get("url", ""),
+            "tags": item.get("tags", []),
         })
         print(f"已推送 CCTV 内容: {title}")
 
-    # B. 时政/政策 (聚合)
+    # 政策/市场：即时快讯只发标题+链接，避免被AI摘要阻塞
+    now_ts = datetime.now().strftime("%m-%d %H:%M")
+    pending = PendingStore()
+
+    if policy_items:
+        lines = []
+        for idx, it in enumerate(policy_items[:15], 1):
+            lines.append(f"{idx}. {it.get('title','')}\n   {it.get('url','')}")
+        push_to_wechat({
+            "title": f"【政策快讯】{now_ts}",
+            "summary": "\n\n".join(lines),
+            "url": "",
+            "tags": ["政策类"],
+        })
+        # 避免队列无限膨胀：只入队一部分，后续靠高频轮询持续补充
+        pending.add_many(policy_items[:30])
+
+    if market_items:
+        lines = []
+        for idx, it in enumerate(market_items[:20], 1):
+            lines.append(f"{idx}. {it.get('title','')}\n   {it.get('url','')}")
+        push_to_wechat({
+            "title": f"【市场快讯】{now_ts}",
+            "summary": "\n\n".join(lines),
+            "url": "",
+            "tags": ["市场"],
+        })
+        pending.add_many(market_items[:40])
+
+
+def analysis_job():
+    """低频执行：从待分析队列取出内容，做AI摘要后再推送深度聚合。"""
+    print("=== ANALYSIS JOB START ===")
+    pending = PendingStore()
+    # 每轮只处理有限数量，避免AI摘要拖慢；未处理的留到下一轮
+    items = pending.pop_many(30)
+    if not items:
+        print("无待分析内容。")
+        return
+
+    cctv_items, policy_items, market_items = _classify(items)
+    # CCTV 不做AI摘要，直接忽略（已在快讯里发过）
+    policy_items = policy_items[:10]
+    market_items = market_items[:15]
+    items_to_summarize = policy_items + market_items
+
+    print(f"待分析：政策 {len(policy_items)} 条，市场 {len(market_items)} 条，共 {len(items_to_summarize)} 条")
+    if not items_to_summarize:
+        return
+
+    print(f"正在生成摘要，共 {len(items_to_summarize)} 条...")
+    summarized_items = summarize_batch(items_to_summarize, max_workers=4)
+
+    policy_sums = []
+    market_sums = []
+    for item in summarized_items:
+        tags = item.get("tags", []) or []
+        if "政策类" in tags or "政治" in tags:
+            policy_sums.append(item)
+        else:
+            market_sums.append(item)
+
+    now_ts = datetime.now().strftime("%m-%d %H:%M")
     if policy_sums:
         content_lines = []
         for idx, item in enumerate(policy_sums, 1):
-            summary = item.get('summary', (item.get('content') or "")[:100]).replace('\n', ' ')
-            content_lines.append(f"{idx}. {item['title']}\n   {summary}")
-        
-        full_text = "\n\n".join(content_lines)
-        title = f"【时政与政策速递】 {datetime.now().strftime('%m-%d %H:%M')}"
+            summary = (item.get("summary") or (item.get("content") or "")[:120]).replace("\n", " ")
+            content_lines.append(f"{idx}. {item.get('title','')}\n   {summary}")
         push_to_wechat({
-            "title": title,
-            "summary": full_text,
-            "url": ""
+            "title": f"【时政与政策速递】{now_ts}",
+            "summary": "\n\n".join(content_lines),
+            "url": "",
         })
-        print(f"已推送政策聚合: {title}")
+        print("已推送政策深度聚合。")
 
-    # C. 股市/行业 (聚合)
     if market_sums:
         content_lines = []
         for idx, item in enumerate(market_sums, 1):
-            summary = item.get('summary', (item.get('content') or "")[:100]).replace('\n', ' ')
-            content_lines.append(f"{idx}. {item['title']}\n   {summary}")
-        
-        full_text = "\n\n".join(content_lines)
-        title = f"【市场与行业动态】 {datetime.now().strftime('%m-%d %H:%M')}"
+            summary = (item.get("summary") or (item.get("content") or "")[:120]).replace("\n", " ")
+            content_lines.append(f"{idx}. {item.get('title','')}\n   {summary}")
         push_to_wechat({
-            "title": title,
-            "summary": full_text,
-            "url": ""
+            "title": f"【市场与行业动态】{now_ts}",
+            "summary": "\n\n".join(content_lines),
+            "url": "",
         })
-        print(f"已推送市场聚合: {title}")
+        print("已推送市场深度聚合。")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AI 新闻推送工具")
     parser.add_argument("--once", action="store_true", help="只执行一次后退出（CI/工作流模式）")
-    parser.add_argument("--interval-mins", type=int, default=60, help="循环模式下的运行间隔（分钟）")
+    parser.add_argument("--poll-seconds", type=int, default=180, help="快讯抓取轮询间隔（秒，越小越即时）")
+    parser.add_argument("--analysis-mins", type=int, default=60, help="AI深度分析聚合间隔（分钟）")
+    parser.add_argument("--interval-mins", type=int, default=None, help="兼容旧参数：循环间隔（分钟，已弃用）")
     args = parser.parse_args()
 
-    job()  # 启动时立即执行一次
+    # 兼容旧参数：若用户仍传了 --interval-mins，则映射到 poll-seconds
+    if args.interval_mins is not None:
+        args.poll_seconds = max(30, int(args.interval_mins) * 60)
+
+    fast_job()  # 启动时立即执行一次快讯
 
     if args.once:
+        # once 模式下额外跑一次分析，尽量把快讯补上深度解读
+        analysis_job()
         sys.exit(0)
 
-    # 循环模式：按间隔分钟运行
+    # 循环模式：快讯高频轮询 + 分析低频聚合
     schedule.clear()
-    schedule.every(args.interval_mins).minutes.do(job)
-    print(f"AI新闻推送工具已启动（循环模式），间隔 {args.interval_mins} 分钟...")
+    schedule.every(args.poll_seconds).seconds.do(fast_job)
+    schedule.every(args.analysis_mins).minutes.do(analysis_job)
+    print(f"AI新闻推送工具已启动：快讯轮询 {args.poll_seconds}s，深度分析 {args.analysis_mins}min")
     while True:
         schedule.run_pending()
         time.sleep(5)

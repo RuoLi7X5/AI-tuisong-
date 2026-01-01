@@ -10,13 +10,36 @@ from .policy_watch import PolicyWatchCrawler
 from .policy_sources import MultiPolicyCrawler
 from .cctv_news import CCTVNewsCrawler
 from state_store import StateStore
+import concurrent.futures
+import hashlib
+from typing import Any, Dict, Iterable, List, Tuple
 
 
-def _deduplicate(items):
-    seen = set()
-    deduped = []
+def _stable_item_key(it: Dict[str, Any]) -> str:
+    """Build a stable de-dup key for a news item.
+
+    Priority:
+    - url (best)
+    - normalized title
+    - short hash of (title+content) as last resort
+    """
+    url = (it.get("url") or "").strip()
+    if url:
+        return f"url:{url}"
+    title = (it.get("title") or "").strip()
+    if title:
+        return f"title:{title}"
+    content = (it.get("content") or "").strip()
+    raw = (title + "\n" + content).encode("utf-8", errors="ignore")
+    digest = hashlib.sha1(raw).hexdigest()[:12]
+    return f"hash:{digest}"
+
+
+def _deduplicate(items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: List[Dict[str, Any]] = []
     for it in items:
-        key = (it.get("url") or "", it.get("title") or "")
+        key = _stable_item_key(it)
         if key in seen:
             continue
         seen.add(key)
@@ -40,16 +63,39 @@ def run_all_crawlers():
         MultiPolicyCrawler(),  # 多部委/交易所等政策/公告源
         CCTVNewsCrawler(),     # 新闻联播内容
     ]
-    news_list = []
-    store = StateStore()
-    gold_snapshot = None
-    for crawler in crawlers:
+
+    def _run_one(crawler: NewsCrawler) -> Tuple[str, List[Dict[str, Any]]]:
         try:
-            result = crawler.crawl()
+            result = crawler.crawl()  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001 - keep system running
             print(f"[爬虫错误] {crawler.__class__.__name__}: {exc}")
             result = []
-        print(f"[爬虫调试] {crawler.__class__.__name__} 抓取到 {len(result)} 条")
+        if not isinstance(result, list):
+            result = []
+        # attach source for debugging/tracing (won't break downstream)
+        for it in result:
+            if isinstance(it, dict):
+                it.setdefault("source", crawler.__class__.__name__)
+        return (crawler.__class__.__name__, result)  # type: ignore[return-value]
+
+    news_list: List[Dict[str, Any]] = []
+    store = StateStore()
+    gold_snapshot = None
+
+    # Run crawlers concurrently (IO-bound). Post-process sequentially to keep
+    # StateStore operations simple and deterministic.
+    max_workers = min(8, max(1, len(crawlers)))
+    results_by_name: Dict[str, List[Dict[str, Any]]] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(_run_one, c) for c in crawlers]
+        for fut in concurrent.futures.as_completed(futures):
+            name, result = fut.result()
+            results_by_name[name] = result
+
+    for crawler in crawlers:
+        cname = crawler.__class__.__name__
+        result = results_by_name.get(cname, [])
+        print(f"[爬虫调试] {cname} 抓取到 {len(result)} 条")
         # 合并黄金来源：只保留一条
         if isinstance(crawler, (GoldPriceCrawler, SinaGoldPriceCrawler)):
             # 若已有黄金快照，跳过后续黄金源
@@ -58,10 +104,10 @@ def run_all_crawlers():
             if result:
                 gold_snapshot = result[0]
                 text = f"{gold_snapshot.get('title','')}\n{gold_snapshot.get('content','')}"
-                tags = match_keywords(text)
+                tags = gold_snapshot.get("tags") or match_keywords(text)
                 if tags:
                     gold_snapshot["tags"] = tags
-                key = gold_snapshot.get("url") or gold_snapshot.get("title", "")
+                key = _stable_item_key(gold_snapshot)
                 if not store.seen(key):
                     store.mark(key)
                     news_list.append(gold_snapshot)
@@ -71,7 +117,7 @@ def run_all_crawlers():
         if isinstance(crawler, CCTVNewsCrawler):
             for item in result:
                 # CCTV items usually already have tags assigned in crawler
-                key = item.get("url") or item.get("title", "")
+                key = _stable_item_key(item)
                 if not store.seen(key):
                     store.mark(key)
                     news_list.append(item)
@@ -79,10 +125,10 @@ def run_all_crawlers():
 
         for item in result:
             text = f"{item.get('title','')}\n{item.get('content','')}"
-            tags = match_keywords(text)
+            tags = item.get("tags") or match_keywords(text)
             if tags:
                 item["tags"] = tags
-                key = item.get("url") or item.get("title", "")
+                key = _stable_item_key(item)
                 if not store.seen(key):
                     store.mark(key)
                     news_list.append(item)

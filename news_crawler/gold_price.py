@@ -29,11 +29,14 @@ class GoldPriceCrawler(NewsCrawler):
         try:
             resp = requests.get(self.url, headers=self.headers, timeout=10)
             data = resp.json()
-            lst = data.get("data", {}).get("diff", [])
+            payload = data.get("data") or {}
+            lst = payload.get("diff", [])
             if isinstance(lst, dict): # 有时候 diff 是 dict (id做key)
                  lst = list(lst.values())
             
             for it in lst:
+                if not isinstance(it, dict):
+                    continue
                 name = it.get("f14", "黄金")
                 price = it.get("f2")  # 最新价
                 change_pct = it.get("f3")  # 涨跌幅%
