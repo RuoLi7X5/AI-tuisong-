@@ -37,7 +37,9 @@ class OpenAISummarizer:
 
         self.model: str = resolved_model
         self.max_tokens: int = max_tokens
-        self.client = OpenAI(api_key=resolved_api_key or None, base_url=resolved_base_url)
+        # 防止一次AI请求卡住，导致整轮抓取/推送被拖到“几小时后”
+        # OpenAI SDK v1 支持 client-level timeout（秒）
+        self.client = OpenAI(api_key=resolved_api_key or None, base_url=resolved_base_url, timeout=30)
 
     def _build_prompt(self, news_item: Dict[str, Any]) -> str:
         content = news_item.get("content", "")
